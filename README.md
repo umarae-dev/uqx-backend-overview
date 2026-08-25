@@ -1,15 +1,25 @@
 # UQX Backend — Rewards, Referral & Account Ledger Infrastructure
 
-> **The server-side accounting and identity layer behind the UQX native Android ecosystem.**
+> Production architecture plus selected production-safe backend source copied from the private FastAPI service.
 
-UQX Backend is the private production API that powers UQX account authentication, recurring engagement-reward sessions, referral accounting, the internal UQX account ledger, user-to-user transfers, leaderboards, notifications, active sessions and two-factor authentication.
+UQX Backend is the server-side identity, rewards, referral and internal-ledger layer behind the native UQX Android application.
 
-The backend is intentionally separate from the app's **self-custody BNB Smart Chain wallet**. Server-accounted rewards live in the UQX account layer; private keys for the on-device wallet are not generated or stored by this backend.
+**Production stack:** Python · FastAPI · PostgreSQL / asyncpg  
+**Private production repository:** `uqx-backend`  
+**Public repository:** selected exact production modules + tests + architecture/security documentation  
+**Client overview:** [`uqx-app-overview`](https://github.com/umarae-dev/uqx-app-overview)
 
-**Client overview:** [UQX Native App](https://github.com/umarae-dev/uqx-app-overview)  
-**API stack:** Python · FastAPI · PostgreSQL / asyncpg
+## Reviewer start here
 
----
+This repository is no longer documentation-only. Review:
+
+- [`production-safe/app/security.py`](production-safe/app/security.py) — exact production bcrypt password hashing/verification module;
+- [`production-safe/app/referral_tiers.py`](production-safe/app/referral_tiers.py) — exact production referral-tier calculation logic;
+- [`SOURCE_MANIFEST.md`](SOURCE_MANIFEST.md) — exact private production paths/blob SHAs;
+- [`tests/test_production_safe.py`](tests/test_production_safe.py) — executable tests for the published modules;
+- [`ARCHITECTURE.md`](ARCHITECTURE.md) and [`SECURITY.md`](SECURITY.md) — system and security boundaries.
+
+The full commercial backend remains private because it includes live database/service wiring, authentication/session internals, user data surfaces and abuse-control implementation that should not be exposed merely to make a public repository larger.
 
 ## System role
 
@@ -36,384 +46,133 @@ Android Self-Custody Wallet
         └── BNB Smart Chain
 ```
 
-The backend can account for app rewards and internal transfers. It does **not** need the user's self-custody wallet recovery phrase or private key to do this work.
+The backend never needs the recovery phrase or private key of the native self-custody wallet in order to account for rewards or internal transfers.
 
----
+## Reward-session accounting
 
-## Engagement reward sessions
+The product's recurring 24-hour “mining” flow is an engagement/reward session, not proof-of-work mining by the phone.
 
-UQX uses a recurring 24-hour participation/reward session that the mobile product calls "mining".
+Production invariants include:
 
-This is an **engagement-based reward mechanism**, not proof-of-work mining performed by the phone.
+- only one active reward session per account;
+- expired sessions can be completed defensively by authenticated surfaces;
+- completion is atomic so one session cannot be credited twice;
+- reward/referral state is server-owned rather than trusted from the client.
 
-High-level lifecycle:
+## Device-abuse hardening
 
-```text
-Authenticated user
-      │
-      ▼
-Start reward session
-      │
-      ├── reject duplicate active session
-      ├── apply current reward policy
-      └── record session
-      │
-      ▼
-24-hour active window
-      │
-      ▼
-Atomic completion guard
-      │
-      ├── credit user's UQX account ledger
-      ├── record referral rewards where applicable
-      └── create notification
-```
+Recent production work hardened the mining-device boundary around a stable app-scoped device signal.
 
-### Defensive auto-completion
+The public invariant is:
 
-A completed 24-hour session does not rely on the user pressing a special "claim" button at exactly the right moment.
+- normal login remains multi-device;
+- mining identity can be associated with a stable app-scoped device signal;
+- IP/User-Agent is not treated as physical-device identity because NAT/mobile networks can collide;
+- deleting an account cannot be used as an immediate farming reset;
+- legitimate shared/resold-device transfer can occur after the security cooldown;
+- account identity is server user ID, not mutable email text.
 
-Authenticated surfaces can defensively check whether the user's latest active session has expired. If it has, the backend finalizes it before returning wallet/dashboard state.
-
-This avoids the common failure mode where a finished reward remains invisible simply because the user closed the app before the timer ended.
-
-### Double-processing protection
-
-Session completion updates only a session that is still marked active. If another request has already finalized the same session, the second completion attempt does not credit it again.
-
-This is a critical accounting invariant:
-
-> **one completed reward session should produce one account credit.**
-
----
+The exact operational implementation and bypass-sensitive anti-abuse details remain private by design. The public repository documents the behavior without publishing a recipe for defeating it.
 
 ## Referral accounting
 
-Referral rewards are derived from **credited activity**, not merely from the existence of an invite record.
+Referral rewards are tied to credited activity rather than just invite existence. The production service maintains direct/upstream referral relationships, linked reward records and tier state.
 
-The production system supports a two-level referral graph:
+The exact public `referral_tiers.py` module currently defines the visible direct-referral tier progression and speed-bonus percentages used by the product. Because these are product-facing tier rules rather than hidden fraud-detection signatures, the module is safe to publish and test.
 
-```text
-User C completes rewarded activity
-        │
-        ├── Level 1 reward → direct referrer B
-        │
-        └── Level 2 reward → upstream referrer A (where applicable)
-```
+## Internal ledger and transfers
 
-Each referral reward is stored as its own accounting record linked to:
+The backend maintains the in-app UQX reward/account balance separately from the Android self-custody BSC wallet.
 
-- referrer;
-- referred user;
-- source reward session;
-- referral level;
-- credited amount;
-- timestamp.
+Internal P2P transfer invariants include:
 
-The referrer's account balance is then credited and a user notification is generated.
+- server-side recipient resolution;
+- no self-transfer;
+- positive amount validation;
+- locked sender balance during transfer evaluation;
+- atomic debit/credit/transfer record;
+- recipient notification after success.
 
-This produces a traceable relationship between the original activity and the resulting referral reward instead of maintaining only one opaque aggregate number.
+This prevents two concurrent transfer attempts from spending the same pre-transfer account balance.
 
----
+## Authentication and 2FA
 
-## Referral tiers and activity boosts
+Production features include:
 
-The referral system also maintains direct-network counts and tier information used by the product to present rank/progress and engagement-speed bonuses.
+- bcrypt password hashing;
+- random bearer sessions with finite expiration;
+- blocked/deleted account enforcement;
+- active-session listing/revocation;
+- login security notifications;
+- disposable-email rejection;
+- TOTP two-factor authentication;
+- one-time backup codes stored as hashes;
+- expiring pre-auth state and recovery flows.
 
-The public architecture intentionally does not publish production anti-abuse thresholds or every operational tuning constant.
+The public `security.py` is the exact production bcrypt helper. Full login/session/2FA route code remains private because it is much more tightly coupled to live account and operational controls.
 
-The important boundary is:
-
-- network/tier state is derived server-side;
-- the Android client displays the result;
-- a modified client cannot grant itself a higher tier by editing local state.
-
----
-
-## Internal UQX account ledger
-
-The backend maintains an **internal account balance** for rewards and in-app transfers.
-
-This is distinct from the user's self-custody BSC address.
-
-Sources that can appear in account history include:
-
-- completed reward sessions;
-- referral rewards;
-- internal sends;
-- internal receives;
-- withdrawal records where applicable.
-
-The API merges these sources into a chronological transaction view for the mobile client.
-
----
-
-## Atomic user-to-user transfers
-
-Internal UQX sends are processed inside a database transaction.
-
-High-level flow:
-
-```text
-Sender chooses recipient UID
-        │
-        ▼
-Resolve recipient server-side
-        │
-        ├── reject missing recipient
-        ├── reject self-transfer
-        └── validate positive amount
-        │
-        ▼
-Lock sender balance row
-        │
-        ├── verify available balance
-        ├── debit sender
-        ├── credit receiver
-        └── record transfer
-        │
-        ▼
-Commit transaction
-        │
-        ▼
-Notify recipient
-```
-
-The sender balance is locked while the transfer is evaluated, preventing two simultaneous requests from both spending the same pre-transfer balance.
-
----
-
-## Account ledger vs. blockchain wallet
+## Account layer vs blockchain wallet
 
 | Capability | Backend account ledger | Android self-custody wallet |
 |---|---|---|
 | Reward-session credits | Yes | No |
 | Referral rewards | Yes | No |
 | Internal P2P send | Yes | Separate from chain transfer |
-| Recovery phrase | Never required | Device-only |
-| Private key | Never required | Device-only |
-| BNB address | Optional account metadata | Core wallet identity |
+| Recovery phrase/private key | Never required | Device-only |
 | Direct BSC token reads | No | Yes |
-| Presale/vesting chain reads | No | Yes |
+| Presale/vesting reads | No | Yes |
 
-This separation prevents the word "wallet" from hiding two very different trust models.
+Canonical UQX contract source/deployments/transactions live in [`uqx-bnb-contracts-overview`](https://github.com/umarae-dev/uqx-bnb-contracts-overview), not in this backend repository.
 
----
+## Public/private boundary
 
-## External withdrawal status
+Public here:
 
-The current production backend keeps external on-chain withdrawal from the **internal reward ledger** disabled until the product's external-liquidity/DEX flow is ready for that capability.
+- exact approved production-safe modules;
+- source/blob provenance;
+- executable unit tests;
+- architecture/security model;
+- CI and public-secret guard.
 
-Users can still move account-layer UQX between UQX users through the internal P2P ledger.
+Kept private:
 
-This is intentionally documented rather than presenting a disabled route as a live blockchain-withdrawal product.
+- production database URL/password;
+- email/push/service credentials;
+- bearer tokens/session data;
+- user/customer records;
+- complete auth/mining/wallet/2FA router implementation;
+- operational anti-abuse thresholds/signatures;
+- private runbooks and deployment configuration.
 
----
+## Run the public subset
 
-## Authentication
-
-The production backend supports account authentication with server-issued bearer sessions.
-
-Current security/account behavior includes:
-
-- bcrypt password hashing;
-- cryptographically random session tokens;
-- finite session expiration;
-- blocked/deleted-account enforcement;
-- device/session metadata;
-- active-session listing;
-- remote revocation of another session;
-- new-login security notifications;
-- disposable-email rejection during native registration;
-- referral attribution during account creation.
-
-Authentication and reward authorization are enforced by the backend rather than by client-side visibility rules.
-
----
-
-## Two-factor authentication
-
-UQX supports TOTP-based two-factor authentication.
-
-The flow includes:
-
-- authenticator-app setup;
-- TOTP verification before enabling 2FA;
-- one-time backup codes;
-- hashed storage of backup codes;
-- 2FA-gated login sessions;
-- expiring pre-authentication state;
-- email-based recovery for a user who has already passed the password step;
-- security notification when a verified login creates a new session.
-
-Backup codes are shown to the user at setup and stored as hashes rather than recoverable plaintext copies.
-
-See [`SECURITY.md`](SECURITY.md) for the public security boundary and current hardening priorities.
-
----
-
-## Active sessions
-
-Authenticated users can inspect their active login sessions and revoke sessions that are no longer trusted.
-
-The API identifies the current session separately so the product can require normal logout for the device currently being used while allowing remote revocation of other devices.
-
----
-
-## Leaderboard & mining history
-
-The backend provides server-derived weekly and monthly reward leaderboards.
-
-Ranking comes from completed reward-session data rather than a client-submitted score.
-
-The current user's own position can still be returned even when they fall outside the top result set.
-
-Users can also retrieve paginated reward-session history including earned amount, status and timing information.
-
----
-
-## Notifications
-
-Reward, referral, transfer and security events can create user-facing notifications.
-
-Examples include:
-
-- reward session started;
-- reward credited;
-- referral bonus credited;
-- UQX received from another user;
-- new account login.
-
-The native app also integrates push-notification infrastructure for timely delivery.
-
----
-
-## Server-side trust model
-
-```text
-Untrusted client input
-        │
-        ▼
-FastAPI validation + authenticated user context
-        │
-        ▼
-Server-owned rules
-        │
-        ├── session state
-        ├── balance state
-        ├── referral graph
-        ├── tier state
-        └── authorization
-        │
-        ▼
-PostgreSQL transaction / durable record
+```bash
+python -m venv .venv
+# Windows: .venv\Scripts\activate
+# macOS/Linux: source .venv/bin/activate
+pip install -r requirements-dev.txt
+python scripts/check_public_repo.py
+python -m compileall -q production-safe tests scripts
+pytest -q
 ```
 
-The mobile application is not treated as the source of truth for balances, completed rewards, referral earnings or account authorization.
+No production credential or database connection is required.
 
----
+## CI
 
-## Abuse-resistance philosophy
+GitHub Actions runs:
 
-A rewards application must assume that some clients will be modified, automated or repeatedly reinstalled.
+- install public test dependencies;
+- public repository secret/file guard;
+- Python compile check;
+- tests for password hashing and referral-tier boundaries.
 
-The production system therefore includes server-side controls around areas such as:
+## Production lineage
 
-- duplicate active reward sessions;
-- account/device association;
-- referral uniqueness;
-- authenticated ownership;
-- balance locking during transfers;
-- blocked/deleted accounts;
-- disposable-email registration;
-- session expiration/revocation.
+The private FastAPI backend predates this public release. Public Git history represents the publication and maintenance history of the safe subset, not the complete production-development history.
 
-Exact operational thresholds and detection details are intentionally not published here because exposing them can make abuse easier.
-
-These controls reduce casual and repeated abuse but are not presented as perfect Sybil resistance. Stronger identity/reputation/device-attestation controls remain an ongoing security area.
-
----
-
-## Technology
-
-- Python
-- FastAPI
-- PostgreSQL
-- asyncpg
-- Pydantic
-- bcrypt
-- PyOTP / TOTP
-- Docker
-- email / push notification services
-
-The API exposes a health endpoint and uses an application lifespan to initialize and close the database connection pool cleanly.
-
----
-
-## Public vs. private repository boundary
-
-This repository is a **public product, accounting and security architecture overview**. The production API source remains private.
-
-### Public here
-
-- reward-session lifecycle;
-- referral-accounting model;
-- account-vs-self-custody distinction;
-- internal transfer invariants;
-- authentication/session concepts;
-- 2FA architecture;
-- leaderboard model;
-- security philosophy.
-
-### Kept private
-
-- production source code;
-- database credentials;
-- email/push credentials;
-- exact anti-abuse thresholds and signatures;
-- internal operational configuration;
-- private recovery/authentication internals not required for review;
-- user data;
-- production runbooks.
-
-**Never commit production database credentials, bearer tokens, email credentials, API secrets, private keys, seed phrases or user-private information to this repository.**
-
----
-
-## BNB Chain relationship
-
-The backend is the **off-chain community/accounting layer** of UQX.
-
-BNB Smart Chain remains the on-chain layer for the BEP-20 token, presale/vesting contracts and the native Android self-custody wallet.
-
-```text
-Community activity / referrals
-            │
-            ▼
-       UQX Backend
-            │
-            ▼
-    internal reward ledger
-
-            ║ trust boundary
-
-    Android self-custody wallet
-            │
-            ▼
-      BNB Smart Chain
-            │
-            ├── UQX token
-            └── presale / vesting state
-```
-
-This hybrid architecture lets the consumer product run high-frequency engagement/accounting workflows without pretending every app interaction is itself a blockchain transaction.
-
----
+See [`SOURCE_MANIFEST.md`](SOURCE_MANIFEST.md), [`ARCHITECTURE.md`](ARCHITECTURE.md) and [`SECURITY.md`](SECURITY.md).
 
 ## Status
 
-**Active production development.**
-
-The private backend currently includes authentication, reward-session processing, two-level referral accounting, internal UQX transfers, leaderboards/history, notifications, active-session management and TOTP two-factor authentication.
-
-See [`ARCHITECTURE.md`](ARCHITECTURE.md) for the system map and [`SECURITY.md`](SECURITY.md) for the public security posture.
+The private production backend contains authentication, reward-session processing, two-level referral accounting, internal transfers, leaderboards/history, notifications, active-session management and TOTP 2FA. This repository now exposes a testable production-safe subset while keeping live credentials, user data and bypass-sensitive controls private.
