@@ -1,69 +1,90 @@
-# UQX Backend — Architecture
+# UQX Backend — Account Services Architecture
 
-## System map
+## Current system boundary
 
 ```text
-Native Android Client
+UQX Native Android Wallet
         │
-        │ HTTPS
+        ├── on-device BIP39/EVM wallet generation
+        ├── Android Keystore-backed encrypted storage
+        ├── device authentication
+        └── supported read-only BNB Smart Chain state
+
+Separate HTTPS account-services boundary
+        │
         ▼
 FastAPI Application
         │
         ├── Authentication / Sessions
-        ├── Reward Sessions
-        ├── Referral Accounting
-        ├── Internal Wallet Ledger
-        ├── P2P Transfers
-        ├── Leaderboards / History
+        ├── Account Recovery / 2FA
         ├── Notifications
-        ├── Settings
-        └── Two-Factor Authentication
+        ├── Profile / Settings
+        └── legacy compatibility services
+                ├── historical account ledger
+                ├── historical referral accounting
+                ├── historical leaderboard/history routes
+                └── historical mining/reward API contracts
         │
         ▼
 PostgreSQL
 ```
 
-The production backend is an off-chain account/reward system. The Android app's self-custody BNB wallet is a separate trust boundary and does not require this backend to hold private keys.
+The current UQX product is the self-custody Web3 wallet. The backend is not the custody authority for the native wallet recovery phrase or private key.
 
-## Core invariants
+## Wallet trust boundary
 
-### Reward session
+```text
+Android device
+  ├── BIP39 recovery phrase
+  ├── EVM private key
+  ├── BNB Smart Chain address
+  └── encrypted local wallet store
+            │
+            ▼
+      supported chain reads
+```
 
-A reward session may be finalized only while its database state is active. The finalization path updates the session, credits the account ledger, applies eligible referral credits and creates notifications.
+A backend login token is not a wallet private key. Losing or revoking an application session should not be described as equivalent to losing or revoking the self-custody wallet.
 
-### Internal transfer
-
-An internal send is processed in one database transaction. The sender balance row is locked before available balance is checked, then sender debit, receiver credit and the transfer record are committed together.
-
-### Referral reward
-
-Referral credits are attached to the source reward session and stored as separate records instead of being represented only as a mutable aggregate counter.
+## Account-service invariants
 
 ### Authentication
 
-Protected routes resolve the bearer token server-side, verify expiration and user status, and update session activity before returning the authenticated user identity.
+Protected routes resolve bearer/session state server-side, verify expiry and user status, and apply the production session controls before returning authenticated account state.
 
-### 2FA
+### Two-factor authentication
 
-TOTP login uses a short-lived pre-authentication state. Backup codes are stored as hashes and marked used after successful consumption.
+TOTP login uses bounded pre-authentication state. Recovery/backup credentials should be stored and consumed according to the production security implementation rather than exposed as plaintext account secrets.
+
+### Notifications / settings
+
+Notification, profile and settings data are account-level services. They can be provided without the backend taking possession of the native wallet mnemonic/private key.
+
+## Legacy compatibility services
+
+Older production versions contain account-ledger, referral, leaderboard and mining/reward routes. Where still operational, their invariants remain important for data integrity, but they are not current product features.
+
+Examples of historical invariants include:
+
+- account-ledger mutations happen transactionally;
+- referral/accounting records preserve source linkage;
+- historical session finalization cannot be repeated arbitrarily;
+- internal account transfers must not be represented as BNB Smart Chain wallet transfers.
+
+These routes should be retired through an explicit API/client migration after dependency checks, not cosmetically renamed in a branding change.
 
 ## Account and chain separation
 
 ```text
-Internal account ledger
-  ├── reward credits
-  ├── referral credits
-  └── UQX user-to-user sends
-
-Self-custody BNB wallet
-  ├── BIP39 mnemonic
-  ├── private key
-  ├── BSC address
-  └── on-chain token / contract state
+Legacy/internal account state             Self-custody BNB wallet
+  ├── server-side records                   ├── BIP39 mnemonic
+  ├── compatibility balances               ├── private key
+  └── historical referral/session data      ├── public BSC address
+                                            └── on-chain token/contract state
 ```
 
-These two systems should not be described as the same wallet.
+The two systems must never be described as the same wallet or balance.
 
 ## Public documentation boundary
 
-This file intentionally describes architecture and invariants rather than production SQL schema, credentials, anti-abuse thresholds or operational secrets.
+This public reference documents architecture, source provenance and trust boundaries. Production SQL schema, user records, credentials, anti-abuse thresholds and operational secrets remain private.

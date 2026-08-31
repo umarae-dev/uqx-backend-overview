@@ -1,148 +1,131 @@
-# UQX Backend — Rewards, Referral & Account Ledger Infrastructure
+# UQX Backend — Account Services Compatibility Layer
 
-> Production architecture plus selected production-safe backend source copied from the private FastAPI service.
+> **Production-derived FastAPI account/security modules retained behind the current UQX self-custody wallet product.**
 
-UQX Backend is the server-side identity, rewards, referral and internal-ledger layer behind the native UQX Android application.
+UQX is currently positioned as a **self-custody Web3 wallet**. The native Android wallet owns the wallet trust boundary: recovery phrase and private key generation/storage happen on the device, while supported BNB Smart Chain state is read against the public wallet address.
+
+This repository documents a separate server-side account-services layer from earlier/current application infrastructure. It contains authentication, session, notification and legacy account-ledger/referral components that may remain operational for backwards compatibility while the wallet-first product surface is migrated.
 
 **Production stack:** Python · FastAPI · PostgreSQL / asyncpg  
 **Private production repository:** `uqx-backend`  
-**Public repository:** selected exact production modules + tests + architecture/security documentation  
-**Client overview:** [`uqx-app-overview`](https://github.com/umarae-dev/uqx-app-overview)
+**Public repository:** selected production-safe modules + tests + architecture/security documentation  
+**Current wallet overview:** [`uqx-app-overview`](https://github.com/umarae-dev/uqx-app-overview)
+
+## Product boundary
+
+```text
+Current UQX Product
+       │
+       ▼
+Self-Custody Android Wallet
+       │
+       ├── device-owned BIP39 recovery phrase
+       ├── device-owned EVM keypair
+       ├── Android Keystore-backed encrypted storage
+       └── supported BNB Smart Chain reads
+
+Separate account-services boundary
+       │
+       ├── authentication / sessions
+       ├── notifications
+       ├── profile / settings
+       ├── 2FA
+       └── legacy account-ledger / referral APIs retained where compatibility requires
+```
+
+The account backend does **not** need the self-custody wallet mnemonic/private key to provide account services or to identify the wallet's public address where product workflows require it.
+
+## Legacy terminology
+
+Older production code contains routes and models named around:
+
+- mining;
+- reward sessions;
+- referral rewards;
+- internal reward balances;
+- leaderboards.
+
+Those names document implementation history and compatibility surfaces. They are **not current UQX product branding** and should not be used in app-store copy, website positioning, investor material or the main Android navigation.
+
+Removing a deployed API simply to improve naming could break older clients. The safe migration path is:
+
+1. remove legacy surfaces from the current client/product experience;
+2. mark server routes/models as compatibility/legacy where practical;
+3. confirm operational/client dependencies;
+4. retire unused endpoints in a dedicated API migration rather than a branding-only change.
 
 ## Reviewer start here
 
-This repository is no longer documentation-only. Review:
+The public safe subset includes:
 
-- [`production-safe/app/security.py`](production-safe/app/security.py) — exact production bcrypt password hashing/verification module;
-- [`production-safe/app/referral_tiers.py`](production-safe/app/referral_tiers.py) — exact production referral-tier calculation logic;
-- [`SOURCE_MANIFEST.md`](SOURCE_MANIFEST.md) — exact private production paths/blob SHAs;
-- [`tests/test_production_safe.py`](tests/test_production_safe.py) — executable tests for the published modules;
-- [`ARCHITECTURE.md`](ARCHITECTURE.md) and [`SECURITY.md`](SECURITY.md) — system and security boundaries.
+- [`production-safe/app/security.py`](production-safe/app/security.py) — production-derived bcrypt password hashing/verification;
+- [`production-safe/app/referral_tiers.py`](production-safe/app/referral_tiers.py) — historical/referral-tier logic retained for source provenance;
+- [`SOURCE_MANIFEST.md`](SOURCE_MANIFEST.md) — private production path/blob lineage;
+- [`tests/test_production_safe.py`](tests/test_production_safe.py) — executable tests for published modules;
+- [`ARCHITECTURE.md`](ARCHITECTURE.md) and [`SECURITY.md`](SECURITY.md) — system/security boundaries.
 
-The full commercial backend remains private because it includes live database/service wiring, authentication/session internals, user data surfaces and abuse-control implementation that should not be exposed merely to make a public repository larger.
+Publication of a legacy-safe module does not mean that feature defines the current product.
 
-## System role
+## Account security services
 
-```text
-UQX Native Android App
-        │
-        │ HTTPS + authenticated API
-        ▼
-UQX Backend
-   │
-   ├── Identity & Sessions
-   ├── Reward Sessions
-   ├── Referral Accounting
-   ├── Internal UQX Ledger
-   ├── P2P Transfers
-   ├── Leaderboards / History
-   ├── Notifications
-   └── Security / 2FA
-
-Separate trust boundary:
-
-Android Self-Custody Wallet
-        │
-        └── BNB Smart Chain
-```
-
-The backend never needs the recovery phrase or private key of the native self-custody wallet in order to account for rewards or internal transfers.
-
-## Reward-session accounting
-
-The product's recurring 24-hour “mining” flow is an engagement/reward session, not proof-of-work mining by the phone.
-
-Production invariants include:
-
-- only one active reward session per account;
-- expired sessions can be completed defensively by authenticated surfaces;
-- completion is atomic so one session cannot be credited twice;
-- reward/referral state is server-owned rather than trusted from the client.
-
-## Device-abuse hardening
-
-Recent production work hardened the mining-device boundary around a stable app-scoped device signal.
-
-The public invariant is:
-
-- normal login remains multi-device;
-- mining identity can be associated with a stable app-scoped device signal;
-- IP/User-Agent is not treated as physical-device identity because NAT/mobile networks can collide;
-- deleting an account cannot be used as an immediate farming reset;
-- legitimate shared/resold-device transfer can occur after the security cooldown;
-- account identity is server user ID, not mutable email text.
-
-The exact operational implementation and bypass-sensitive anti-abuse details remain private by design. The public repository documents the behavior without publishing a recipe for defeating it.
-
-## Referral accounting
-
-Referral rewards are tied to credited activity rather than just invite existence. The production service maintains direct/upstream referral relationships, linked reward records and tier state.
-
-The exact public `referral_tiers.py` module currently defines the visible direct-referral tier progression and speed-bonus percentages used by the product. Because these are product-facing tier rules rather than hidden fraud-detection signatures, the module is safe to publish and test.
-
-## Internal ledger and transfers
-
-The backend maintains the in-app UQX reward/account balance separately from the Android self-custody BSC wallet.
-
-Internal P2P transfer invariants include:
-
-- server-side recipient resolution;
-- no self-transfer;
-- positive amount validation;
-- locked sender balance during transfer evaluation;
-- atomic debit/credit/transfer record;
-- recipient notification after success.
-
-This prevents two concurrent transfer attempts from spending the same pre-transfer account balance.
-
-## Authentication and 2FA
-
-Production features include:
+Production account infrastructure includes patterns such as:
 
 - bcrypt password hashing;
-- random bearer sessions with finite expiration;
+- finite bearer sessions;
 - blocked/deleted account enforcement;
 - active-session listing/revocation;
 - login security notifications;
 - disposable-email rejection;
 - TOTP two-factor authentication;
-- one-time backup codes stored as hashes;
-- expiring pre-auth state and recovery flows.
+- hashed one-time backup codes;
+- recovery/pre-auth state.
 
-The public `security.py` is the exact production bcrypt helper. Full login/session/2FA route code remains private because it is much more tightly coupled to live account and operational controls.
+Full production auth/session/2FA routing remains private because it is coupled to live accounts and operational controls.
 
-## Account layer vs blockchain wallet
+## Wallet separation
 
-| Capability | Backend account ledger | Android self-custody wallet |
+| Capability | Account backend | Self-custody Android wallet |
 |---|---|---|
-| Reward-session credits | Yes | No |
-| Referral rewards | Yes | No |
-| Internal P2P send | Yes | Separate from chain transfer |
-| Recovery phrase/private key | Never required | Device-only |
-| Direct BSC token reads | No | Yes |
-| Presale/vesting reads | No | Yes |
+| Login/session state | Yes | No |
+| 2FA/account controls | Yes | No |
+| Notification/profile services | Yes | No |
+| Recovery phrase/private key | Never required | Device-owned |
+| BIP39/EVM wallet generation | No | Yes |
+| Direct supported BSC state reads | No | Yes |
+| Presale/vesting position reads | No | Yes |
 
-Canonical UQX contract source/deployments/transactions live in [`uqx-bnb-contracts-overview`](https://github.com/umarae-dev/uqx-bnb-contracts-overview), not in this backend repository.
+Canonical token/vesting/presale contract source and deployment evidence live in [`uqx-bnb-contracts-overview`](https://github.com/umarae-dev/uqx-bnb-contracts-overview).
+
+## Historical ledger/referral services
+
+The private backend still contains older internal-accounting and referral logic. These systems are documented here only as compatibility/provenance context.
+
+They must not be confused with:
+
+- the user's BNB Smart Chain wallet balance;
+- self-custody;
+- on-chain transaction signing;
+- current UQX wallet branding.
 
 ## Public/private boundary
 
 Public here:
 
-- exact approved production-safe modules;
+- approved production-safe modules;
 - source/blob provenance;
 - executable unit tests;
-- architecture/security model;
-- CI and public-secret guard.
+- architecture/security documentation;
+- CI and public-secret guards.
 
 Kept private:
 
-- production database URL/password;
+- production database credentials;
 - email/push/service credentials;
-- bearer tokens/session data;
-- user/customer records;
-- complete auth/mining/wallet/2FA router implementation;
-- operational anti-abuse thresholds/signatures;
-- private runbooks and deployment configuration.
+- bearer/session data;
+- user records;
+- complete auth/legacy-ledger/2FA router implementations;
+- bypass-sensitive abuse controls;
+- operational runbooks/deployment configuration.
 
 ## Run the public subset
 
@@ -158,21 +141,10 @@ pytest -q
 
 No production credential or database connection is required.
 
-## CI
-
-GitHub Actions runs:
-
-- install public test dependencies;
-- public repository secret/file guard;
-- Python compile check;
-- tests for password hashing and referral-tier boundaries.
-
 ## Production lineage
 
-The private FastAPI backend predates this public release. Public Git history represents the publication and maintenance history of the safe subset, not the complete production-development history.
+The private backend predates this public extraction. Public commit history represents the publication/maintenance timeline rather than the complete private development history.
 
-See [`SOURCE_MANIFEST.md`](SOURCE_MANIFEST.md), [`ARCHITECTURE.md`](ARCHITECTURE.md) and [`SECURITY.md`](SECURITY.md).
+## Current status
 
-## Status
-
-The private production backend contains authentication, reward-session processing, two-level referral accounting, internal transfers, leaderboards/history, notifications, active-session management and TOTP 2FA. This repository now exposes a testable production-safe subset while keeping live credentials, user data and bypass-sensitive controls private.
+The current UQX brand is the self-custody Web3 wallet. This backend should be understood as an account-services and compatibility layer while legacy product surfaces are retired safely.
